@@ -13,7 +13,7 @@ st.markdown("""
     header, #MainMenu, footer {visibility: hidden;}
     .block-container { padding-top: 2rem !important; max-width: 800px !important; }
     * { font-family: 'Courier New', Courier, monospace !important; color: #C5D0E6; }
-    [data-testid="stDataFrame"], [data-testid="stTextInput"] { background-color: #1A1D27 !important; border: 1px solid #2D3243 !important; border-radius: 12px !important; }
+    [data-testid="stDataFrame"], [data-testid="stTextInput"], [data-testid="stTextArea"] { background-color: #1A1D27 !important; border: 1px solid #2D3243 !important; border-radius: 12px !important; }
     .stButton > button { background-color: #7B61FF !important; color: white !important; border-radius: 12px !important; border: none !important; padding: 12px 24px !important; font-weight: bold !important; display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(123, 97, 255, 0.3) !important; }
     .log-box { background-color: #1A1D27; border-radius: 12px; border: 1px solid #2D3243; padding: 16px; font-size: 13px; }
     </style>
@@ -34,7 +34,6 @@ if "TWILIO_ACCOUNT_SID" in st.secrets and len(st.secrets["TWILIO_ACCOUNT_SID"]) 
     sms_klar = True
 
 # --- 3. DATABASE (LOKAL ELLER GOOGLE SHEETS) ---
-# I et fuldt produktionsmiljø bruges st.connection("gsheets"), her simulerer vi hukommelsen for stabilitet out-of-the-box.
 if "vagtplan" not in st.session_state:
     st.session_state.vagtplan = pd.DataFrame([
         {"dato": "2026-04-12", "vagt": "Morgen", "medarbejder": "Anne", "status": "Aktiv"},
@@ -59,14 +58,14 @@ def send_sms(til_nummer, besked, type_modtager="Afløser"):
         except Exception as e:
             return f"FEJL i SMS: {e}"
     else:
-        time.sleep(1)
+        time.sleep(1) # Simulerer at det tager lidt tid at sende en SMS
         return f"SIMULERET SMS sendt til {type_modtager}: '{besked}'"
 
 # --- 5. UI: HEADER & DATA ---
 st.markdown("""
 <div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 2rem;">
     <div style="font-size: 28px; font-weight: bold; color: white;">MJ<span style="color: #7B61FF;">logs</span><span style="color: #81E6D9;">_</span></div>
-    <div style="font-size: 9px; color: #636D83; letter-spacing: 3px; margin-top: 4px;">AUTONOMOUS WORKFLOW • V4.0</div>
+    <div style="font-size: 9px; color: #636D83; letter-spacing: 3px; margin-top: 4px;">AUTONOMOUS WORKFLOW • V4.1</div>
 </div>
 """, unsafe_allow_html=True)
 
@@ -85,13 +84,15 @@ else:
 
     if st.button("AKTIVER AUTONOMT WORKFLOW"):
         terminal = st.empty()
-        log_html = '<div class="log-box"><div style="color:#515C74; margin-bottom:10px;">mjlogs — system.log</div>'
+        
+        # Her er fejlen rettet! Vi bruger en sikker liste til loggen.
+        log_data = []
         
         def update_log(tekst, farve="#81E6D9", tag="INFO"):
-            nonlocal log_html
             tid = datetime.now().strftime("%H:%M:%S")
-            log_html += f'<div style="margin-bottom:4px;"><span style="color:#515C74;">{tid}</span> <span style="color:{farve}; font-weight:bold;">{tag}</span> &nbsp;{tekst}</div>'
-            terminal.markdown(log_html + '</div>', unsafe_allow_html=True)
+            log_data.append(f'<div style="margin-bottom:4px;"><span style="color:#515C74;">{tid}</span> <span style="color:{farve}; font-weight:bold;">{tag}</span> &nbsp;{tekst}</div>')
+            samlet_log = '<div class="log-box"><div style="color:#515C74; margin-bottom:10px;">mjlogs — system.log</div>' + "".join(log_data) + '</div>'
+            terminal.markdown(samlet_log, unsafe_allow_html=True)
 
         update_log("Besked modtaget. Analyserer data...")
         
@@ -112,31 +113,35 @@ else:
         AFLØSER: [Navn]
         """
         
-        svar = model.generate_content(prompt).text
-        syg, dato, afloeser = "", "", ""
-        for linje in svar.split('\n'):
-            if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
-            if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
-            if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
+        try:
+            svar = model.generate_content(prompt).text
+            syg, dato, afloeser = "", "", ""
+            for linje in svar.split('\n'):
+                if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
+                if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
+                if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
 
-        update_log(f"AI Konklusion -> Syg: {syg} | Vagt: {dato} | Ny kandidat: {afloeser}", "#FFB86C", "ANALYSE")
-        
-        # TRIN 2: OPDATER DATABASE
-        st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
-        update_log("Vagtplan opdateret i hukommelsen.", "#22D489", "DATABASE")
-        
-        # TRIN 3: KOMMUNIKATION (SMS TIL AFLØSER)
-        afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
-        sms_tekst_kandidat = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
-        log_sms_kandidat = send_sms(afloeser_data['telefon'], sms_tekst_kandidat, "Afløser")
-        update_log(log_sms_kandidat, "#7B61FF", "SMS-OUT")
-        
-        # TRIN 4: KOMMUNIKATION (NOTIFIKATION TIL CHEF)
-        chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
-        sms_tekst_chef = f"MJlogs Info: {syg} er sygemeldt {dato}. Vagten er automatisk overdraget til {afloeser}. Vagtplanen er opdateret."
-        log_sms_chef = send_sms(chef_nummer, sms_tekst_chef, "Butikschef")
-        update_log(log_sms_chef, "#7B61FF", "SMS-OUT")
-        
-        update_log("Workflow fuldført med succes.", "#22D489", "SUCCES")
-        st.rerun() # Genindlæser siden så tabellen opdateres visuelt
-        
+            update_log(f"AI Konklusion -> Syg: {syg} | Vagt: {dato} | Ny kandidat: {afloeser}", "#FFB86C", "ANALYSE")
+            
+            # TRIN 2: OPDATER DATABASE
+            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
+            update_log("Vagtplan opdateret i hukommelsen.", "#22D489", "DATABASE")
+            
+            # TRIN 3: KOMMUNIKATION (SMS TIL AFLØSER)
+            afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
+            sms_tekst_kandidat = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
+            log_sms_kandidat = send_sms(afloeser_data['telefon'], sms_tekst_kandidat, "Afløser")
+            update_log(log_sms_kandidat, "#7B61FF", "SMS-OUT")
+            
+            # TRIN 4: KOMMUNIKATION (NOTIFIKATION TIL CHEF)
+            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+            sms_tekst_chef = f"MJlogs Info: {syg} er sygemeldt {dato}. Vagten er automatisk overdraget til {afloeser}. Vagtplanen er opdateret."
+            log_sms_chef = send_sms(chef_nummer, sms_tekst_chef, "Butikschef")
+            update_log(log_sms_chef, "#7B61FF", "SMS-OUT")
+            
+            update_log("Workflow fuldført med succes.", "#22D489", "SUCCES")
+            time.sleep(2)
+            st.rerun() 
+            
+        except Exception as e:
+            update_log(f"Fejl i AI forbindelsen: {e}", "#FF4B4B", "ERROR")
