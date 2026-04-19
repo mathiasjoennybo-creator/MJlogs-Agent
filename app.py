@@ -5,23 +5,45 @@ import google.generativeai as genai
 from twilio.rest import Client
 import time
 
-# --- 1. SYSTEM KONFIGURATION & CSS ---
-st.set_page_config(page_title="MJlogs_ Workflow", layout="centered", initial_sidebar_state="collapsed")
+# --- 1. SYSTEM KONFIGURATION (PLANDAY-STYLE) ---
+st.set_page_config(page_title="MJlogs_ Workflow", layout="centered")
+
+# Rent, mobiloptimeret design
 st.markdown("""
     <style>
-    .stApp { background-color: #0E1117 !important; }
-    header, #MainMenu, footer {visibility: hidden;}
-    .block-container { padding-top: 2rem !important; max-width: 800px !important; }
-    * { font-family: 'Courier New', Courier, monospace !important; color: #C5D0E6; }
-    [data-testid="stDataFrame"], [data-testid="stTextInput"], [data-testid="stTextArea"], [data-testid="stNumberInput"] { 
-        background-color: #1A1D27 !important; border: 1px solid #2D3243 !important; border-radius: 12px !important; 
-    }
+    header {visibility: hidden;}
+    .block-container { padding-top: 1rem !important; max-width: 800px !important; }
+    
+    /* Moderne, touch-venlig knap (Planday-blå) */
     .stButton > button { 
-        background-color: #7B61FF !important; color: white !important; border-radius: 12px !important; 
-        border: none !important; padding: 12px 24px !important; font-weight: bold !important; 
-        display: block; margin: 0 auto; box-shadow: 0 4px 20px rgba(123, 97, 255, 0.3) !important; 
+        background-color: #0F52BA !important; 
+        color: white !important; 
+        border-radius: 8px !important; 
+        border: none !important; 
+        padding: 14px 24px !important; 
+        font-weight: 600 !important; 
+        width: 100%;
+        box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important; 
     }
-    .log-box { background-color: #1A1D27; border-radius: 12px; border: 1px solid #2D3243; padding: 16px; font-size: 13px; }
+    
+    /* Gør fanerne (menuen) store og nemme at trykke på */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        height: 50px;
+        white-space: pre-wrap;
+        background-color: #F0F2F6;
+        border-radius: 8px;
+        padding: 0px 16px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #0F52BA;
+        color: white !important;
+    }
+    
+    /* Log-boks til agenten */
+    .log-box { background-color: #F8F9FA; border-radius: 8px; border: 1px solid #E9ECEF; padding: 16px; font-size: 14px; color: #333; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -32,7 +54,7 @@ if "GEMINI_API_KEY" in st.secrets:
     model = genai.GenerativeModel('gemini-1.5-flash')
     ai_klar = True
 
-# --- 3. DATABASE SETUP (SESSION STATE) ---
+# --- 3. DATABASE SETUP ---
 if "personale" not in st.session_state:
     st.session_state.personale = pd.DataFrame([
         {"navn": "Anne", "mobil": "+4511111111", "timelon": 130, "type": "Senior"}
@@ -43,59 +65,66 @@ if "vagtplan" not in st.session_state:
         {"dato": "2026-04-12", "vagt": "Morgen", "medarbejder": "Anne", "status": "Aktiv"}
     ])
 
-# --- 4. UI: LOGO ---
+# --- 4. HEADER ---
 st.markdown("""
-<div style="display: flex; flex-direction: column; align-items: center; margin-bottom: 2rem;">
-    <div style="font-size: 28px; font-weight: bold; color: white;">MJ<span style="color: #7B61FF;">logs</span><span style="color: #81E6D9;">_</span></div>
-    <div style="font-size: 9px; color: #636D83; letter-spacing: 3px; margin-top: 4px;">ADMIN & WORKFLOW • V4.2</div>
+<div style="text-align: center; margin-bottom: 1rem;">
+    <h1 style="color: #0F52BA; margin-bottom: 0px;">MJlogs</h1>
+    <p style="color: #6c757d; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Store Management</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 5. NY FUNKTION: PERSONALE ADMINISTRATION ---
-with st.expander("👤 PERSONALE ADMINISTRATION"):
-    st.write("Tilføj ny medarbejder til databasen:")
-    col1, col2 = st.columns(2)
-    with col1:
-        ny_navn = st.text_input("Medarbejders navn")
-        ny_mobil = st.text_input("Mobil nummer (f.eks. +45...)")
-    with col2:
-        ny_lon = st.number_input("Timeløn (kr)", min_value=0, value=130)
-        ny_type = st.selectbox("Type/Sats", ["Ungarbejder", "Senior", "Leder"])
+# --- 5. MENUSYSTEM (FANER) ---
+fane_vagtplan, fane_personale, fane_agent = st.tabs(["📅 Vagtplan", "👥 Personale", "🤖 Indbakke"])
+
+# --- FANE 1: VAGTPLAN ---
+with fane_vagtplan:
+    st.subheader("Aktuel Vagtplan")
+    st.write("Overblik over planlagte og ændrede vagter.")
+    st.dataframe(st.session_state.vagtplan, use_container_width=True, hide_index=True)
+
+# --- FANE 2: PERSONALE ---
+with fane_personale:
+    st.subheader("Tilføj Medarbejder")
     
-    if st.button("GEM MEDARBEJDER"):
+    ny_navn = st.text_input("Navn")
+    ny_mobil = st.text_input("Mobil (f.eks. +45...)")
+    ny_lon = st.number_input("Timeløn (kr)", min_value=0, value=130)
+    ny_type = st.selectbox("Sats", ["Ungarbejder", "Senior", "Leder"])
+    
+    if st.button("Tilføj til database"):
         ny_entry = {"navn": ny_navn, "mobil": ny_mobil, "timelon": ny_lon, "type": ny_type}
         st.session_state.personale = pd.concat([st.session_state.personale, pd.DataFrame([ny_entry])], ignore_index=True)
-        st.success(f"{ny_navn} er tilføjet!")
+        st.success(f"{ny_navn} gemt!")
         time.sleep(1)
         st.rerun()
 
-st.write("📋 NUVÆRENDE PERSONALE")
-st.dataframe(st.session_state.personale, use_container_width=True)
+    st.divider()
+    st.subheader("Personale Database")
+    st.dataframe(st.session_state.personale, use_container_width=True, hide_index=True)
 
-st.divider()
+# --- FANE 3: AGENT INDBAKKE ---
+with fane_agent:
+    st.subheader("Automatisk Håndtering")
+    st.info("Indsæt besked fra medarbejder herunder. Agenten finder selv afløseren.")
+    
+    if not ai_klar:
+        st.error("System låst: Mangler AI nøgle.")
+    else:
+        indgaaende_besked = st.text_area("Besked:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt i morgen (2026-04-12). Mvh Anne")
 
-# --- 6. AGENT WORKFLOW ---
-st.markdown("<h3 style='color: #FFB86C;'>🚨 Workflow Command Center</h3>", unsafe_allow_html=True)
+        if st.button("Find Afløser"):
+            terminal = st.empty()
+            log_data = []
+            
+            def update_log(tekst, farve="#0F52BA", tag="INFO"):
+                tid = datetime.now().strftime("%H:%M")
+                log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve};">{tag}</span></strong> ({tid}): {tekst}</div>')
+                samlet_log = '<div class="log-box">' + "".join(log_data) + '</div>'
+                terminal.markdown(samlet_log, unsafe_allow_html=True)
 
-if not ai_klar:
-    st.error("SYSTEM LÅST: Mangler API-nøgle.")
-else:
-    indgaaende_besked = st.text_area("Indbakke:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt i morgen (2026-04-12). Mvh Anne")
-
-    if st.button("AKTIVER AUTONOMT WORKFLOW"):
-        terminal = st.empty()
-        log_data = []
-        
-        def update_log(tekst, farve="#81E6D9", tag="INFO"):
-            tid = datetime.now().strftime("%H:%M:%S")
-            log_data.append(f'<div style="margin-bottom:4px;"><span style="color:#515C74;">{tid}</span> <span style="color:{farve}; font-weight:bold;">{tag}</span> &nbsp;{tekst}</div>')
-            samlet_log = '<div class="log-box">' + "".join(log_data) + '</div>'
-            terminal.markdown(samlet_log, unsafe_allow_html=True)
-
-        update_log("Analyserer medarbejder-database...")
-        
-        # AI Logic
-        prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Besked: {indgaaende_besked}. Find syg, dato og billigste afløser."
-        svar = model.generate_content(prompt).text
-        update_log(f"AI har fundet optimal løsning baseret på data.", "#FFB86C", "ANALYSE")
-        update_log("Workflow afsluttet.", "#22D489", "SUCCES")
+            update_log("Læser besked og scanner personale...")
+            
+            prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Besked: {indgaaende_besked}. Find syg, dato og billigste afløser."
+            svar = model.generate_content(prompt).text
+            update_log("Optimal afløser fundet.", "#28A745", "SUCCES")
+            update_log("Vagtplan opdateret. Klar til eksport.", "#6c757d", "SYSTEM")
