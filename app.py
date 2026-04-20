@@ -8,13 +8,13 @@ import time
 # --- 1. SYSTEM KONFIGURATION (PLANDAY-STYLE) ---
 st.set_page_config(page_title="MJlogs_ Workflow", layout="centered")
 
-# Rent, mobiloptimeret design
+# Rent, mobiloptimeret design med rettet menu-farve
 st.markdown("""
     <style>
     header {visibility: hidden;}
     .block-container { padding-top: 1rem !important; max-width: 800px !important; }
     
-    /* Moderne, touch-venlig knap (Planday-blå) */
+    /* Moderne, touch-venlig knap */
     .stButton > button { 
         background-color: #0F52BA !important; 
         color: white !important; 
@@ -26,24 +26,25 @@ st.markdown("""
         box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important; 
     }
     
-    /* Gør fanerne (menuen) store og nemme at trykke på */
+    /* MENUSYSTEM (Faner) - Nu synlig i Dark Mode */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
     }
     .stTabs [data-baseweb="tab"] {
         height: 50px;
         white-space: pre-wrap;
-        background-color: #F0F2F6;
+        background-color: #2D3243 !important; /* Mørkegrå til inaktive faner */
+        color: #C5D0E6 !important; /* Lys tekst til inaktive faner */
         border-radius: 8px;
         padding: 0px 16px;
     }
     .stTabs [aria-selected="true"] {
-        background-color: #0F52BA;
-        color: white !important;
+        background-color: #0F52BA !important; /* Blå til aktiv fane */
+        color: white !important; /* Hvid tekst til aktiv fane */
     }
     
-    /* Log-boks til agenten */
-    .log-box { background-color: #F8F9FA; border-radius: 8px; border: 1px solid #E9ECEF; padding: 16px; font-size: 14px; color: #333; }
+    /* Log-boks */
+    .log-box { background-color: #1A1D27; border-radius: 8px; border: 1px solid #2D3243; padding: 16px; font-size: 14px; color: #C5D0E6; }
     </style>
     """, unsafe_allow_html=True)
 
