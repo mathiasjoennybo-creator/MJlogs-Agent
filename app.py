@@ -5,46 +5,42 @@ import google.generativeai as genai
 from twilio.rest import Client
 import time
 
-# --- 1. SYSTEM KONFIGURATION (PLANDAY-STYLE) ---
+# --- 0. SESSION STATE (MØRK TILSTAND) ---
+if "dark_mode" not in st.session_state:
+    st.session_state.dark_mode = False
+
+def skift_tema():
+    st.session_state.dark_mode = not st.session_state.dark_mode
+
+# Farvepaletter (Lys / Mørk)
+if st.session_state.dark_mode:
+    bg_main, bg_box, color_text, bg_tab, color_tab = "#0E1117", "#1A1D27", "#C5D0E6", "#2D3243", "#C5D0E6"
+else:
+    bg_main, bg_box, color_text, bg_tab, color_tab = "#F4F7F6", "#FFFFFF", "#333333", "#E9ECEF", "#6C757D"
+
+# --- 1. SYSTEM KONFIGURATION ---
 st.set_page_config(page_title="MJlogs_ Workflow", layout="centered")
 
-# Rent, mobiloptimeret design med rettet menu-farve
-st.markdown("""
+# Dynamisk CSS der skifter med knappen
+st.markdown(f"""
     <style>
-    header {visibility: hidden;}
-    .block-container { padding-top: 1rem !important; max-width: 800px !important; }
+    header {{visibility: hidden;}}
+    .stApp {{ background-color: {bg_main} !important; }}
+    .block-container {{ padding-top: 1rem !important; max-width: 800px !important; color: {color_text} !important; }}
+    h1, h2, h3, h4, p, span, div, label {{ color: {color_text} !important; }}
     
-    /* Moderne, touch-venlig knap */
-    .stButton > button { 
-        background-color: #0F52BA !important; 
-        color: white !important; 
-        border-radius: 8px !important; 
-        border: none !important; 
-        padding: 14px 24px !important; 
-        font-weight: 600 !important; 
-        width: 100%;
-        box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important; 
-    }
+    .stButton > button {{ background-color: #0F52BA !important; color: white !important; border-radius: 8px !important; border: none !important; padding: 14px 24px !important; font-weight: 600 !important; width: 100%; box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important; }}
     
-    /* MENUSYSTEM (Faner) - Nu synlig i Dark Mode */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #2D3243 !important; /* Mørkegrå til inaktive faner */
-        color: #C5D0E6 !important; /* Lys tekst til inaktive faner */
-        border-radius: 8px;
-        padding: 0px 16px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0F52BA !important; /* Blå til aktiv fane */
-        color: white !important; /* Hvid tekst til aktiv fane */
-    }
+    .stTabs [data-baseweb="tab-list"] {{ gap: 8px; }}
+    .stTabs [data-baseweb="tab"] {{ height: 50px; background-color: {bg_tab} !important; color: {color_tab} !important; border-radius: 8px; padding: 0px 16px; }}
+    .stTabs [aria-selected="true"] {{ background-color: #0F52BA !important; color: white !important; }}
     
-    /* Log-boks */
-    .log-box { background-color: #1A1D27; border-radius: 8px; border: 1px solid #2D3243; padding: 16px; font-size: 14px; color: #C5D0E6; }
+    .log-box {{ background-color: {bg_box}; border-radius: 8px; border: 1px solid {bg_tab}; padding: 16px; font-size: 14px; }}
+    
+    /* Input felter og tabeller */
+    [data-testid="stDataFrame"], [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stTextArea"] textarea, [data-testid="stSelectbox"] div {{ 
+        background-color: {bg_box} !important; color: {color_text} !important; border-color: {bg_tab} !important; 
+    }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -55,9 +51,15 @@ if "GEMINI_API_KEY" in st.secrets:
     model = genai.GenerativeModel('gemini-1.5-flash')
     ai_klar = True
 
+sms_klar = False
+if "TWILIO_ACCOUNT_SID" in st.secrets and len(st.secrets["TWILIO_ACCOUNT_SID"]) > 20:
+    twilio_client = Client(st.secrets["TWILIO_ACCOUNT_SID"], st.secrets["TWILIO_AUTH_TOKEN"])
+    sms_klar = True
+
 # --- 3. DATABASE SETUP ---
 if "personale" not in st.session_state:
     st.session_state.personale = pd.DataFrame([
+        {"navn": "Lukas", "mobil": "+4500000000", "timelon": 75, "type": "Ungarbejder"},
         {"navn": "Anne", "mobil": "+4511111111", "timelon": 130, "type": "Senior"}
     ])
 
@@ -66,66 +68,97 @@ if "vagtplan" not in st.session_state:
         {"dato": "2026-04-12", "vagt": "Morgen", "medarbejder": "Anne", "status": "Aktiv"}
     ])
 
-# --- 4. HEADER ---
+# --- 4. FUNKTIONER ---
+def send_sms(til_nummer, besked, type_modtager="Afløser"):
+    if sms_klar:
+        try:
+            msg = twilio_client.messages.create(body=besked, from_=st.secrets["TWILIO_PHONE_NUMBER"], to=til_nummer)
+            return f"ÆGTE SMS sendt til {type_modtager} ({til_nummer})"
+        except Exception as e:
+            return f"FEJL i SMS: {e}"
+    else:
+        time.sleep(1)
+        return f"SIMULERET SMS sendt til {type_modtager}: '{besked}'"
+
+# --- 5. HEADER ---
 st.markdown("""
 <div style="text-align: center; margin-bottom: 1rem;">
-    <h1 style="color: #0F52BA; margin-bottom: 0px;">MJlogs</h1>
-    <p style="color: #6c757d; font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Store Management</p>
+    <h1 style="color: #0F52BA !important; margin-bottom: 0px;">MJlogs</h1>
+    <p style="font-size: 12px; text-transform: uppercase; letter-spacing: 1px;">Store Management</p>
 </div>
 """, unsafe_allow_html=True)
 
-# --- 5. MENUSYSTEM (FANER) ---
-fane_vagtplan, fane_personale, fane_agent = st.tabs(["📅 Vagtplan", "👥 Personale", "🤖 Indbakke"])
+# --- 6. MENUSYSTEM (FANER) ---
+fane_vagtplan, fane_personale, fane_agent, fane_indstillinger = st.tabs(["📅 Vagtplan", "👥 Personale", "🤖 Indbakke", "⚙️ Indstil."])
 
-# --- FANE 1: VAGTPLAN ---
 with fane_vagtplan:
     st.subheader("Aktuel Vagtplan")
-    st.write("Overblik over planlagte og ændrede vagter.")
     st.dataframe(st.session_state.vagtplan, use_container_width=True, hide_index=True)
 
-# --- FANE 2: PERSONALE ---
 with fane_personale:
     st.subheader("Tilføj Medarbejder")
-    
     ny_navn = st.text_input("Navn")
     ny_mobil = st.text_input("Mobil (f.eks. +45...)")
     ny_lon = st.number_input("Timeløn (kr)", min_value=0, value=130)
     ny_type = st.selectbox("Sats", ["Ungarbejder", "Senior", "Leder"])
-    
     if st.button("Tilføj til database"):
         ny_entry = {"navn": ny_navn, "mobil": ny_mobil, "timelon": ny_lon, "type": ny_type}
         st.session_state.personale = pd.concat([st.session_state.personale, pd.DataFrame([ny_entry])], ignore_index=True)
         st.success(f"{ny_navn} gemt!")
         time.sleep(1)
         st.rerun()
-
     st.divider()
-    st.subheader("Personale Database")
     st.dataframe(st.session_state.personale, use_container_width=True, hide_index=True)
 
-# --- FANE 3: AGENT INDBAKKE ---
 with fane_agent:
     st.subheader("Automatisk Håndtering")
-    st.info("Indsæt besked fra medarbejder herunder. Agenten finder selv afløseren.")
-    
     if not ai_klar:
         st.error("System låst: Mangler AI nøgle.")
     else:
         indgaaende_besked = st.text_area("Besked:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt i morgen (2026-04-12). Mvh Anne")
-
         if st.button("Find Afløser"):
             terminal = st.empty()
             log_data = []
-            
             def update_log(tekst, farve="#0F52BA", tag="INFO"):
                 tid = datetime.now().strftime("%H:%M")
-                log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve};">{tag}</span></strong> ({tid}): {tekst}</div>')
-                samlet_log = '<div class="log-box">' + "".join(log_data) + '</div>'
-                terminal.markdown(samlet_log, unsafe_allow_html=True)
+                log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve} !important;">{tag}</span></strong> ({tid}): {tekst}</div>')
+                terminal.markdown('<div class="log-box">' + "".join(log_data) + '</div>', unsafe_allow_html=True)
 
-            update_log("Læser besked og scanner personale...")
-            
-            prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Besked: {indgaaende_besked}. Find syg, dato og billigste afløser."
+            update_log("Analyserer data...")
+            prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Vagtplan: {st.session_state.vagtplan.to_dict('records')}. Besked: '{indgaaende_besked}'. Find den syge og den billigste ledige afløser. Svar KUN sådan:\nSYG: [Navn]\nDATO: [Dato]\nAFLØSER: [Navn]"
             svar = model.generate_content(prompt).text
-            update_log("Optimal afløser fundet.", "#28A745", "SUCCES")
-            update_log("Vagtplan opdateret. Klar til eksport.", "#6c757d", "SYSTEM")
+            syg, dato, afloeser = "", "", ""
+            for linje in svar.split('\n'):
+                if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
+                if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
+                if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
+
+            update_log(f"Valgt afløser: {afloeser}", "#FFB86C", "ANALYSE")
+            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
+            update_log("Vagtplan opdateret.", "#28A745", "DATABASE")
+            
+            try:
+                afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
+                sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
+                log_sms = send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
+                update_log(log_sms, "#17A2B8", "SMS")
+            except IndexError:
+                update_log(f"Kunne ikke finde nummer på {afloeser}", "#DC3545", "FEJL")
+            
+            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+            chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
+            log_chef = send_sms(chef_nummer, chef_tekst, "Chef")
+            update_log(log_chef, "#17A2B8", "SMS")
+
+# --- NY FANE: INDSTILLINGER ---
+with fane_indstillinger:
+    st.subheader("Systemindstillinger")
+    st.write("Tilpas udseende og opsætning for appen.")
+    
+    # Toggle knap der udløser funktionen "skift_tema" automatisk
+    st.toggle("🌙 Aktivér Mørk Tilstand", value=st.session_state.dark_mode, on_change=skift_tema)
+    
+    st.divider()
+    st.write("Status på Forbindelser:")
+    st.success("✅ AI Hjerne (Gemini) Aktiv") if ai_klar else st.error("❌ AI Hjerne Mangler")
+    st.success("✅ SMS Modul (Twilio) Aktiv") if sms_klar else st.warning("⚠️ SMS Modul i Test-Tilstand")
