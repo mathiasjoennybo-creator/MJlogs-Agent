@@ -99,7 +99,7 @@ if not st.session_state.logged_in:
         else:
             st.error("❌ Forkert brugernavn eller adgangskode.")
 
-# --- 4. HOVED-APP (KUN HVIS LOGGET IND) ---
+# --- 4. HOVED-APP ---
 else:
     st.markdown("""
     <div style="text-align: center; margin-bottom: 1rem;">
@@ -132,11 +132,11 @@ else:
             st.dataframe(st.session_state.personale, use_container_width=True, hide_index=True)
 
         with fane_agent:
-            st.subheader("Automatisk Håndtering")
+            st.subheader("Automatisk Håndtering (Admin)")
             if not ai_klar:
                 st.error("System låst: Mangler AI nøgle.")
             else:
-                indgaaende_besked = st.text_area("Besked:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt i morgen (2026-04-12). Mvh Anne")
+                indgaaende_besked = st.text_area("Besked:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt i morgen (2026-04-12). Mvh Anne", key="admin_indbakke")
                 if st.button("Find Afløser"):
                     terminal = st.empty()
                     log_data = []
@@ -186,16 +186,58 @@ else:
 
     # --- MEDARBEJDER VISNING ---
     elif st.session_state.user_role == "Medarbejder":
-        fane_vagtplan, fane_profil = st.tabs(["📅 Vagtplan", "👤 Min Profil"])
+        fane_vagtplan, fane_indbakke, fane_profil = st.tabs(["📅 Vagtplan", "🤖 Indbakke", "👤 Profil"])
         
         with fane_vagtplan:
             st.subheader("Aktuel Vagtplan")
-            st.write("Her kan du se dine og kollegaernes vagter.")
+            st.write("Overblik over vagter i butikken.")
             st.dataframe(st.session_state.vagtplan, use_container_width=True, hide_index=True)
+
+        with fane_indbakke:
+            st.subheader("Kontakt Systemet")
+            st.info("Meld sygdom her. Systemet forsøger automatisk at finde en afløser for dig.")
+            
+            if not ai_klar:
+                st.error("System låst: Mangler AI nøgle.")
+            else:
+                medarbejder_besked = st.text_area("Din besked:", value="Hej MJlogs. Jeg er syg og kan ikke tage min morgenvagt...", key="medarbejder_indbakke")
+                if st.button("Send Besked"):
+                    terminal = st.empty()
+                    log_data = []
+                    def update_log(tekst, farve="#0F52BA", tag="INFO"):
+                        tid = datetime.now().strftime("%H:%M")
+                        log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve} !important;">{tag}</span></strong> ({tid}): {tekst}</div>')
+                        terminal.markdown('<div class="log-box">' + "".join(log_data) + '</div>', unsafe_allow_html=True)
+
+                    update_log("Besked modtaget. Leder efter afløser...")
+                    
+                    # AI analyserer medarbejderens besked
+                    prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Vagtplan: {st.session_state.vagtplan.to_dict('records')}. Besked: '{medarbejder_besked}'. Find den syge og den billigste ledige afløser. Svar KUN sådan:\nSYG: [Navn]\nDATO: [Dato]\nAFLØSER: [Navn]"
+                    svar = model.generate_content(prompt).text
+                    syg, dato, afloeser = "", "", ""
+                    for linje in svar.split('\n'):
+                        if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
+                        if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
+                        if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
+
+                    st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
+                    update_log(f"Vagtplanen er midlertidigt opdateret.", "#28A745", "DATABASE")
+                    
+                    try:
+                        afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
+                        sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
+                        send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
+                        update_log("Der er sendt en SMS til en mulig afløser.", "#17A2B8", "SMS")
+                    except IndexError:
+                        update_log(f"Kunne ikke finde en afløser i systemet.", "#DC3545", "FEJL")
+                    
+                    chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+                    chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
+                    send_sms(chef_nummer, chef_tekst, "Chef")
+                    update_log("Din leder har fået direkte besked. God bedring!", "#17A2B8", "SMS")
             
         with fane_profil:
             st.subheader("Medarbejder Profil")
-            st.info("Du er logget ind som Medarbejder. Kontakt butikschefen for at ændre vagter.")
             st.toggle("🌙 Aktivér Mørk Tilstand", value=st.session_state.dark_mode, on_change=skift_tema)
             st.divider()
             if st.button("Log Ud 🔒"):
