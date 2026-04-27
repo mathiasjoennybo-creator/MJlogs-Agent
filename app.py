@@ -42,10 +42,10 @@ h1, h2, h3, h4, p, span, div, label {{ color: {color_text} !important; }}
     border: none !important; padding: 14px 24px !important; font-weight: 600 !important; 
     width: 100%; box-shadow: 0 2px 5px rgba(0,0,0,0.1) !important; 
 }}
-.stTabs [data-baseweb="tab-list"] {{ gap: 8px; }}
+.stTabs [data-baseweb="tab-list"] {{ gap: 8px; overflow-x: auto; }}
 .stTabs [data-baseweb="tab"] {{ 
     height: 50px; background-color: {bg_tab} !important; color: {color_tab} !important; 
-    border-radius: 8px; padding: 0px 16px; 
+    border-radius: 8px; padding: 0px 16px; font-size: 14px;
 }}
 .stTabs [aria-selected="true"] {{ background-color: #0F52BA !important; color: white !important; }}
 .log-box {{ background-color: {bg_box}; border-radius: 8px; border: 1px solid {bg_tab}; padding: 16px; font-size: 14px; }}
@@ -53,6 +53,8 @@ h1, h2, h3, h4, p, span, div, label {{ color: {color_text} !important; }}
 [data-testid="stTextArea"] textarea, [data-testid="stSelectbox"] div {{ 
     background-color: {bg_box} !important; color: {color_text} !important; border-color: {bg_tab} !important; 
 }}
+.kalender-dato {{ background-color: {bg_tab}; padding: 10px; border-radius: 8px; margin-top: 10px; margin-bottom: 5px; font-weight: bold; }}
+.kalender-vagt {{ padding: 8px 10px; border-left: 4px solid #0F52BA; background-color: {bg_box}; margin-bottom: 5px; border-radius: 0 8px 8px 0; font-size: 14px; }}
 </style>
 """
 st.markdown(css_kode, unsafe_allow_html=True)
@@ -77,7 +79,8 @@ if "personale" not in st.session_state:
 
 if "vagtplan" not in st.session_state:
     st.session_state.vagtplan = pd.DataFrame([
-        {"dato": "2026-04-12", "vagt": "Morgen", "medarbejder": "Anne", "status": "Aktiv"}
+        {"dato": "2026-04-12", "vagt": "Morgen", "medarbejder": "Anne", "status": "Aktiv"},
+        {"dato": "2026-04-13", "vagt": "Lukke", "medarbejder": "Lukas", "status": "Aktiv"}
     ])
 
 def send_sms(til_nummer, besked, type_modtager="Afløser"):
@@ -125,10 +128,29 @@ else:
 
     # --- ADMIN VISNING ---
     if st.session_state.user_role == "Admin":
-        fane_vagtplan, fane_personale, fane_agent, fane_indstillinger = st.tabs(["📅 Vagtplan", "👥 Personale", "🤖 Indbakke", "⚙️ Indstil."])
+        fane_kalender, fane_vagtplan, fane_personale, fane_agent, fane_indstillinger = st.tabs(["📆 Kalender", "📋 Liste", "👥 Personale", "🤖 Indbakke", "⚙️ Indstil."])
+
+        with fane_kalender:
+            st.subheader("Visuel Kalender")
+            df_vagt = st.session_state.vagtplan.copy()
+            
+            if df_vagt.empty:
+                st.info("Ingen vagter planlagt.")
+            else:
+                # Sorterer automatisk efter dato
+                df_vagt['dato'] = pd.to_datetime(df_vagt['dato'])
+                df_vagt = df_vagt.sort_values(by="dato")
+                
+                for dato in df_vagt['dato'].dt.date.unique():
+                    st.markdown(f"<div class='kalender-dato'>📅 {dato.strftime('%d-%m-%Y')}</div>", unsafe_allow_html=True)
+                    dagens_vagter = df_vagt[df_vagt['dato'].dt.date == dato]
+                    
+                    for _, row in dagens_vagter.iterrows():
+                        farve = "🟢" if "Overtaget" not in row['medarbejder'] else "🟠"
+                        st.markdown(f"<div class='kalender-vagt'>⏱️ <b>{row['vagt']}</b> | 👤 {row['medarbejder']} {farve}</div>", unsafe_allow_html=True)
 
         with fane_vagtplan:
-            st.subheader("Aktuel Vagtplan")
+            st.subheader("Rå Data (Vagtplan)")
             st.dataframe(st.session_state.vagtplan, use_container_width=True, hide_index=True)
 
         with fane_personale:
@@ -139,13 +161,7 @@ else:
             ny_type = st.selectbox("Sats", ["Ungarbejder", "Senior", "Leder"])
             
             if st.button("Tilføj til database"):
-                # Rettet så det ikke fejler på mobil
-                ny_entry = {
-                    "navn": ny_navn, 
-                    "mobil": ny_mobil, 
-                    "timelon": ny_lon, 
-                    "type": ny_type
-                }
+                ny_entry = {"navn": ny_navn, "mobil": ny_mobil, "timelon": ny_lon, "type": ny_type}
                 ny_df = pd.DataFrame([ny_entry])
                 st.session_state.personale = pd.concat([st.session_state.personale, ny_df], ignore_index=True)
                 st.success(f"{ny_navn} gemt!")
@@ -210,11 +226,25 @@ else:
 
     # --- MEDARBEJDER VISNING ---
     elif st.session_state.user_role == "Medarbejder":
-        fane_vagtplan, fane_indbakke, fane_profil = st.tabs(["📅 Vagtplan", "🤖 Indbakke", "👤 Profil"])
+        fane_kalender, fane_vagtplan, fane_indbakke, fane_profil = st.tabs(["📆 Kalender", "📋 Liste", "🤖 Indbakke", "👤 Profil"])
         
+        with fane_kalender:
+            st.subheader("Visuel Kalender")
+            df_vagt = st.session_state.vagtplan.copy()
+            if df_vagt.empty:
+                st.info("Ingen vagter planlagt.")
+            else:
+                df_vagt['dato'] = pd.to_datetime(df_vagt['dato'])
+                df_vagt = df_vagt.sort_values(by="dato")
+                for dato in df_vagt['dato'].dt.date.unique():
+                    st.markdown(f"<div class='kalender-dato'>📅 {dato.strftime('%d-%m-%Y')}</div>", unsafe_allow_html=True)
+                    dagens_vagter = df_vagt[df_vagt['dato'].dt.date == dato]
+                    for _, row in dagens_vagter.iterrows():
+                        farve = "🟢" if "Overtaget" not in row['medarbejder'] else "🟠"
+                        st.markdown(f"<div class='kalender-vagt'>⏱️ <b>{row['vagt']}</b> | 👤 {row['medarbejder']} {farve}</div>", unsafe_allow_html=True)
+
         with fane_vagtplan:
-            st.subheader("Aktuel Vagtplan")
-            st.write("Overblik over vagter i butikken.")
+            st.subheader("Rå Data (Vagtplan)")
             st.dataframe(st.session_state.vagtplan, use_container_width=True, hide_index=True)
 
         with fane_indbakke:
