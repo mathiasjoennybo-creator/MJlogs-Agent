@@ -4,6 +4,7 @@ from datetime import datetime
 import google.generativeai as genai
 from twilio.rest import Client
 import time
+import json
 
 # --- 0. SESSION STATE (HUKOMMELSE) ---
 if "dark_mode" not in st.session_state:
@@ -137,7 +138,6 @@ else:
             if df_vagt.empty:
                 st.info("Ingen vagter planlagt.")
             else:
-                # Sorterer automatisk efter dato
                 df_vagt['dato'] = pd.to_datetime(df_vagt['dato'])
                 df_vagt = df_vagt.sort_values(by="dato")
                 
@@ -185,31 +185,73 @@ else:
                         log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve} !important;">{tag}</span></strong> ({tid}): {tekst}</div>')
                         terminal.markdown('<div class="log-box">' + "".join(log_data) + '</div>', unsafe_allow_html=True)
 
-                    update_log("Analyserer data...")
-                    prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Vagtplan: {st.session_state.vagtplan.to_dict('records')}. Besked: '{indgaaende_besked}'. Find den syge og den billigste ledige afløser. Svar KUN sådan:\nSYG: [Navn]\nDATO: [Dato]\nAFLØSER: [Navn]"
-                    svar = model.generate_content(prompt).text
-                    syg, dato, afloeser = "", "", ""
-                    for linje in svar.split('\n'):
-                        if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
-                        if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
-                        if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
+                    update_log("Analyserer data via AI...")
+                    
+                    prompt = f"""
+                    Du er vagtplanlægnings-assistenten for MJlogs.
+                    Analyser følgende data:
+                    Personale: {st.session_state.personale.to_dict('records')}
+                    Vagtplan: {st.session_state.vagtplan.to_dict('records')}
+                    Indgående besked: '{indgaaende_besked}'
 
-                    update_log(f"Valgt afløser: {afloeser}", "#FFB86C", "ANALYSE")
-                    st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
-                    update_log("Vagtplan opdateret.", "#28A745", "DATABASE")
+                    Opgaver:
+                    1. Find navnet på den person, der melder sig syg (syg), og datoen for vagten (dato i formatet YYYY-MM-DD).
+                    2. Find en ledig afløser (afloeser) ud fra disse præcise prioriteter:
+                       - Medarbejderen må IKKE have en vagt i forvejen på den pågældende dato.
+                       - PRIORITET 1: Find den ledige medarbejder med den laveste timeløn (billigste løsning).
+                       - PRIORITET 2: Hvis ingen er ledige på laveste løntrin, søg bredt blandt ALLE andre medarbejdere uanset løn eller type.
+                       - PRIORITET 3: Hvis absolut ingen medarbejdere overhovedet er ledige den dag, skal afloeser sættes til "Ingen".
+
+                    Du SKAL svare udelukkende i dette JSON-format (og intet andet tekst overhovedet):
+                    {{
+                      "syg": "Navn",
+                      "dato": "YYYY-MM-DD",
+                      "afloeser": "Navn eller Ingen"
+                    }}
+                    """
                     
                     try:
-                        afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
-                        sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
-                        log_sms = send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
-                        update_log(log_sms, "#17A2B8", "SMS")
-                    except IndexError:
-                        update_log(f"Kunne ikke finde nummer på {afloeser}", "#DC3545", "FEJL")
-                    
-                    chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
-                    chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
-                    log_chef = send_sms(chef_nummer, chef_tekst, "Chef")
-                    update_log(log_chef, "#17A2B8", "SMS")
+                        svar = model.generate_content(prompt).text.strip()
+                        if svar.startswith("```json"):
+                            svar = svar.split("```json")[1].split("```")[0].strip()
+                        elif svar.startswith("```"):
+                            svar = svar.split("```")[1].split("```")[0].strip()
+                            
+                        data = json.loads(svar)
+                        syg = data.get("syg", "")
+                        dato = data.get("dato", "")
+                        afloeser = data.get("afloeser", "")
+                        
+                        if afloeser and afloeser.lower() != "ingen":
+                            update_log(f"Valgt afløser baseret på regler: {afloeser}", "#FFB86C", "ANALYSE")
+                            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
+                            update_log("Vagtplan opdateret i database.", "#28A745", "DATABASE")
+                            
+                            try:
+                                afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
+                                sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
+                                log_sms = send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
+                                update_log(log_sms, "#17A2B8", "SMS")
+                            except IndexError:
+                                update_log(f"Kunne ikke finde nummer på {afloeser}", "#DC3545", "FEJL")
+                            
+                            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+                            chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
+                            log_chef = send_sms(chef_nummer, chef_tekst, "Chef")
+                            update_log(log_chef, "#17A2B8", "SMS")
+                            st.success(f"✅ Afløser fundet ({afloeser}) og beskeder er afsendt.")
+                        else:
+                            update_log(f"KRITISK: Ingen ledige afløsere fundet på listen for {dato}!", "#DC3545", "ADVARSEL")
+                            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{syg} (Ubesat - Syg)"
+                            
+                            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+                            chef_tekst = f"MJlogs ADVARSEL: {syg} er syg {dato}. Der blev IKKE fundet nogen afløser på listen! Yderligere handling påkrævet."
+                            log_chef = send_sms(chef_nummer, chef_tekst, "Chef-Nød")
+                            update_log(log_chef, "#DC3545", "SMS-NØD")
+                            st.error("🚨 Ingen afløser fundet! Lederen har modtaget en direkte nød-notifikation.")
+                            
+                    except Exception as e:
+                        update_log(f"Fejl ved parsing af AI-svar eller eksekvering: {e}", "#DC3545", "FEJL")
 
         with fane_indstillinger:
             st.subheader("Systemindstillinger")
@@ -263,31 +305,71 @@ else:
                         log_data.append(f'<div style="margin-bottom:6px;"><strong><span style="color:{farve} !important;">{tag}</span></strong> ({tid}): {tekst}</div>')
                         terminal.markdown('<div class="log-box">' + "".join(log_data) + '</div>', unsafe_allow_html=True)
 
-                    update_log("Besked modtaget. Leder efter afløser...")
+                    update_log("Besked modtaget. Analyserer ledige ressourcer...")
                     
-                    prompt = f"Personale: {st.session_state.personale.to_dict('records')}. Vagtplan: {st.session_state.vagtplan.to_dict('records')}. Besked: '{medarbejder_besked}'. Find den syge og den billigste ledige afløser. Svar KUN sådan:\nSYG: [Navn]\nDATO: [Dato]\nAFLØSER: [Navn]"
-                    svar = model.generate_content(prompt).text
-                    syg, dato, afloeser = "", "", ""
-                    for linje in svar.split('\n'):
-                        if "SYG:" in linje: syg = linje.replace("SYG:", "").strip()
-                        if "DATO:" in linje: dato = linje.replace("DATO:", "").strip()
-                        if "AFLØSER:" in linje: afloeser = linje.replace("AFLØSER:", "").strip()
+                    prompt = f"""
+                    Du er vagtplanlægnings-assistenten for MJlogs.
+                    Analyser følgende data:
+                    Personale: {st.session_state.personale.to_dict('records')}
+                    Vagtplan: {st.session_state.vagtplan.to_dict('records')}
+                    Indgående besked: '{medarbejder_besked}'
 
-                    st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
-                    update_log(f"Vagtplanen er midlertidigt opdateret.", "#28A745", "DATABASE")
+                    Opgaver:
+                    1. Find navnet på den person, der melder sig syg (syg), og datoen for vagten (dato i formatet YYYY-MM-DD).
+                    2. Find en ledig afløser (afloeser) ud fra disse præcise prioriteter:
+                       - Medarbejderen må IKKE have en vagt i forvejen på den pågældende dato.
+                       - PRIORITET 1: Find den ledige medarbejder med den laveste timeløn (billigste løsning).
+                       - PRIORITET 2: Hvis ingen er ledige på laveste løntrin, søg bredt blandt ALLE andre medarbejdere uanset løn eller type.
+                       - PRIORITET 3: Hvis absolut ingen medarbejdere overhovedet er ledige den dag, skal afloeser sættes til "Ingen".
+
+                    Du SKAL svare udelukkende i dette JSON-format (og intet andet tekst overhovedet):
+                    {{
+                      "syg": "Navn",
+                      "dato": "YYYY-MM-DD",
+                      "afloeser": "Navn eller Ingen"
+                    }}
+                    """
                     
                     try:
-                        afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
-                        sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
-                        send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
-                        update_log("Der er sendt en SMS til en mulig afløser.", "#17A2B8", "SMS")
-                    except IndexError:
-                        update_log(f"Kunne ikke finde en afløser i systemet.", "#DC3545", "FEJL")
-                    
-                    chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
-                    chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
-                    send_sms(chef_nummer, chef_tekst, "Chef")
-                    update_log("Din leder har fået direkte besked. God bedring!", "#17A2B8", "SMS")
+                        svar = model.generate_content(prompt).text.strip()
+                        if svar.startswith("```json"):
+                            svar = svar.split("```json")[1].split("```")[0].strip()
+                        elif svar.startswith("```"):
+                            svar = svar.split("```")[1].split("```")[0].strip()
+                            
+                        data = json.loads(svar)
+                        syg = data.get("syg", "")
+                        dato = data.get("dato", "")
+                        afloeser = data.get("afloeser", "")
+                        
+                        if afloeser and afloeser.lower() != "ingen":
+                            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{afloeser} (Overtaget)"
+                            update_log(f"Vagtplanen er midlertidigt opdateret.", "#28A745", "DATABASE")
+                            
+                            try:
+                                afloeser_data = st.session_state.personale[st.session_state.personale['navn'] == afloeser].iloc[0]
+                                sms_tekst = f"Hej {afloeser}. {syg} er syg. Kan du overtage vagten {dato}? Svar JA for at bekræfte."
+                                send_sms(afloeser_data['mobil'], sms_tekst, "Afløser")
+                                update_log("Der er sendt en SMS til en mulig afløser.", "#17A2B8", "SMS")
+                            except IndexError:
+                                update_log(f"Kunne ikke finde en afløser i systemet.", "#DC3545", "FEJL")
+                            
+                            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+                            chef_tekst = f"MJlogs: {syg} er syg {dato}. Vagten er tilbudt {afloeser}."
+                            send_sms(chef_nummer, chef_tekst, "Chef")
+                            update_log("Din leder har fået direkte besked. God bedring!", "#17A2B8", "SMS")
+                        else:
+                            update_log("KRITISK: Ingen ledige afløsere fundet på listen!", "#DC3545", "ADVARSEL")
+                            st.session_state.vagtplan.loc[(st.session_state.vagtplan['medarbejder'] == syg) & (st.session_state.vagtplan['dato'] == dato), 'medarbejder'] = f"{syg} (Ubesat - Syg)"
+                            
+                            chef_nummer = st.secrets.get("CHEF_PHONE_NUMBER", "+4500000000")
+                            chef_tekst = f"MJlogs ADVARSEL: {syg} er syg {dato}. Der blev IKKE fundet nogen afløser på listen! Yderligere handling påkrævet."
+                            send_sms(chef_nummer, chef_tekst, "Chef-Nød")
+                            update_log("Systemet kunne ikke finde en afløser. Din leder har fået direkte nød-besked.", "#DC3545", "SMS-NØD")
+                            st.error("🚨 Ingen ledige afløsere fundet. Lederen har modtaget nød-besked.")
+                            
+                    except Exception as e:
+                        update_log(f"Fejl ved behandling af besked: {e}", "#DC3545", "FEJL")
             
         with fane_profil:
             st.subheader("Medarbejder Profil")
